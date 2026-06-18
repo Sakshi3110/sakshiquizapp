@@ -18,51 +18,76 @@ export default function Game() {
   const [answered, setAnswered] = useState(false);
   const [timeLeft, setTimeLeft] = useState(30);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [playerNameConfirmed, setPlayerNameConfirmed] = useState(false);
 
+  // Listen to game state changes
   useEffect(() => {
-    if (!gameId) return;
+    if (!router.isReady || !gameId) return;
 
     const gameRef = ref(database, `games/${gameId}`);
-    const unsubscribe = onValue(gameRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const gameData = snapshot.val();
-        setGame(gameData);
-        setCurrentQuestion(gameData.currentQuestion || 0);
+    const unsubscribe = onValue(
+      gameRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const gameData = snapshot.val();
+          setGame(gameData);
+          setCurrentQuestion(gameData.currentQuestion || 0);
 
-        if (gameData.players) {
-          setPlayers(gameData.players);
-          const sortedPlayers = Object.entries(gameData.players)
-            .map(([id, player]) => ({ id, ...player }))
-            .sort((a, b) => (b.score || 0) - (a.score || 0));
-          setLeaderboard(sortedPlayers);
+          if (gameData.players) {
+            setPlayers(gameData.players);
+            const sortedPlayers = Object.entries(gameData.players)
+              .map(([id, player]) => ({ id, ...player }))
+              .sort((a, b) => (b.score || 0) - (a.score || 0));
+            setLeaderboard(sortedPlayers);
+          }
+
+          setGameState(gameData.status);
+        } else {
+          setGameState('notfound');
         }
-
-        setGameState(gameData.status);
-      } else {
+      },
+      (error) => {
+        console.error('Error loading game:', error);
         setGameState('notfound');
       }
-    });
+    );
 
     return () => unsubscribe();
-  }, [gameId]);
+  }, [router.isReady, gameId]);
 
+  // Register player
   useEffect(() => {
-    if (!playerName && !admin) return;
+    // Wait for router to be ready
+    if (!router.isReady) return;
+    
+    // If admin, skip player registration
+    if (admin === 'true') return;
+    
+    // Need both gameId and playerName (playerName comes from URL query)
+    if (!gameId || !playerName) return;
 
-    if (!playerId) {
-      const newPlayerId = Math.random().toString(36).substring(7);
-      setPlayerId(newPlayerId);
+    // Only register once
+    if (playerNameConfirmed || playerId) return;
 
+    const newPlayerId = Math.random().toString(36).substring(7);
+    setPlayerId(newPlayerId);
+    setPlayerNameConfirmed(true);
+
+    // Only write to database if we have valid data
+    if (gameId && playerName && newPlayerId) {
       const playerRef = ref(database, `games/${gameId}/players/${newPlayerId}`);
       set(playerRef, {
-        name: playerName,
+        name: String(playerName),
         score: 0,
         answered: false,
         answeredAt: null
+      }).catch(error => {
+        console.error('Error registering player:', error);
       });
     }
-  }, [playerName, gameId, playerId, admin]);
+  }, [router.isReady, gameId, playerName, admin, playerId, playerNameConfirmed]);
 
+  // Timer logic
   useEffect(() => {
     if (gameState !== 'playing' || answered) return;
 
@@ -94,6 +119,8 @@ export default function Game() {
       answeredCorrectly: isCorrect,
       score: (players[playerId]?.score || 0) + points,
       answerTime: new Date().toISOString()
+    }).catch(error => {
+      console.error('Error updating answer:', error);
     });
   };
 
@@ -136,17 +163,26 @@ export default function Game() {
     }
   };
 
-  if (!router.isReady) {
-    return <div className="container"><p>Loading...</p></div>;
+  if (!router.isReady || gameState === 'loading') {
+    return (
+      <div className="container">
+        <div style={{ textAlign: 'center', paddingTop: '2rem' }}>
+          <p>Loading game...</p>
+        </div>
+      </div>
+    );
   }
 
   if (!admin && !playerName) {
     return (
       <div className="container">
-        <Link href="/">
-          <button className="button-secondary">Back</button>
-        </Link>
-        <p>Invalid game session</p>
+        <div style={{ textAlign: 'center', paddingTop: '2rem' }}>
+          <h1>Invalid game session</h1>
+          <p>Please use the link from your game host.</p>
+          <Link href="/">
+            <button className="button-secondary">Back to Home</button>
+          </Link>
+        </div>
       </div>
     );
   }
@@ -159,14 +195,6 @@ export default function Game() {
         <Link href="/">
           <button className="button-primary">Back to Home</button>
         </Link>
-      </div>
-    );
-  }
-
-  if (gameState === 'loading') {
-    return (
-      <div className="container">
-        <p>Loading game...</p>
       </div>
     );
   }
@@ -187,7 +215,7 @@ export default function Game() {
             ))}
           </div>
 
-          {admin && (
+          {admin === 'true' && (
             <button onClick={startQuiz} className="button-success">
               Start Quiz ({Object.keys(players).length} players)
             </button>
@@ -203,7 +231,7 @@ export default function Game() {
 
   if (gameState === 'playing') {
     const question = QUESTIONS[currentQuestion];
-    const isCorreect = playerAnswer === question.correctAnswer;
+    const isCorrect = playerAnswer === question.correctAnswer;
 
     return (
       <div className="container game-container">
@@ -258,7 +286,7 @@ export default function Game() {
               </div>
             )}
 
-            {admin && answered && (
+            {admin === 'true' && answered && (
               <button onClick={nextQuestion} className="button-success">
                 Next Question →
               </button>
